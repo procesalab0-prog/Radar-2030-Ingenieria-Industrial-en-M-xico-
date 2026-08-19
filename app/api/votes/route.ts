@@ -1,25 +1,25 @@
-import { env } from "cloudflare:workers";
+import { Redis } from "@upstash/redis";
 
 const choices = ["tecnologia", "humanas", "sustentabilidad", "autonomia", "global"];
+const votesKey = "radar-2030:votes";
 
-async function ensureSchema() {
-  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS votes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    voter_id TEXT NOT NULL,
-    choice TEXT NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch())
-  )`).run();
-  await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_voter_id ON votes(voter_id)").run();
+function getRedis() {
+  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+    throw new Error("Upstash Redis no está configurado.");
+  }
+  return Redis.fromEnv();
 }
 
 export async function GET() {
   try {
-    await ensureSchema();
-    const result = await env.DB.prepare("SELECT choice, COUNT(*) AS total FROM votes GROUP BY choice").all<{ choice: string; total: number }>();
     const totals: Record<string, number> = Object.fromEntries(choices.map((choice) => [choice, 0]));
-    result.results.forEach((row) => { if (choices.includes(row.choice)) totals[row.choice] = Number(row.total); });
+    const votes = await getRedis().hgetall<Record<string, string>>(votesKey) ?? {};
+    Object.values(votes).forEach((choice) => {
+      if (choices.includes(choice)) totals[choice] += 1;
+    });
     return Response.json({ totals, count: Object.values(totals).reduce((a, b) => a + b, 0) }, { headers: { "Cache-Control": "no-store" } });
-  } catch {
+  } catch (error) {
+    console.error("[votes:get]", error);
     return Response.json({ error: "No fue posible consultar la votación." }, { status: 500 });
   }
 }
@@ -28,11 +28,10 @@ export async function POST(request: Request) {
   try {
     const { voterId, choice } = await request.json() as { voterId?: string; choice?: string };
     if (!voterId || voterId.length > 80 || !choice || !choices.includes(choice)) return Response.json({ error: "Voto inválido." }, { status: 400 });
-    await ensureSchema();
-    await env.DB.prepare(`INSERT INTO votes (voter_id, choice, created_at) VALUES (?, ?, unixepoch())
-      ON CONFLICT(voter_id) DO UPDATE SET choice = excluded.choice, created_at = excluded.created_at`).bind(voterId, choice).run();
+    await getRedis().hset(votesKey, { [voterId]: choice });
     return Response.json({ ok: true });
-  } catch {
+  } catch (error) {
+    console.error("[votes:post]", error);
     return Response.json({ error: "No fue posible registrar el voto." }, { status: 500 });
   }
 }

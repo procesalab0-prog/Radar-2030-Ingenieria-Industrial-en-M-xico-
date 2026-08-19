@@ -4,10 +4,12 @@ const choices = ["tecnologia", "humanas", "sustentabilidad", "autonomia", "globa
 const votesKey = "radar-2030:votes";
 
 function getRedis() {
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+  const url = process.env.UPSTASH_REDIS_REST_KV_REST_API_URL;
+  const token = process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN;
+  if (!url || !token) {
     throw new Error("Upstash Redis no está configurado.");
   }
-  return Redis.fromEnv();
+  return new Redis({ url, token });
 }
 
 export async function GET() {
